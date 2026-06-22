@@ -219,7 +219,7 @@ def load_distributed_checkpoint(
 
 
 if __name__ == "__main__":
-    initialize_distributed(tensor_model_parallel_size=2, pipeline_model_parallel_size=1)
+    initialize_distributed(tensor_model_parallel_size=1, pipeline_model_parallel_size=1)
     model_parallel_cuda_manual_seed(123)
 
     gpt_model: GPTModel = model_provider()
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     forward_backward_func: Callable[..., Dict[str, Any]] = get_forward_backward_func()
 
     # Running the model for 5 iterations
-    for iteration in range(5):
+    for iteration in range(50):
         optim.zero_grad()
 
         losses_reduced: Dict[str, Any] = forward_backward_func(
