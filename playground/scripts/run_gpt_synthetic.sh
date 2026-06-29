@@ -2,10 +2,12 @@
 
 # setup directories
 source ${HOME}/depth.sh
-conda deactivate
+# conda deactivate
+
+module load cuda/13.0
 
 # setup environment from MegatronLM
-source ${wspace}/MegatronLM/.venv/bin/activate
+# source ${wspace}/MegatronLM/.venv/bin/activate
 
 #######################
 
@@ -42,7 +44,7 @@ CKPT_DIR="${wspace}/results/debug/gpt_synthetic"
 # the run
 RANK=0 WORLD_SIZE=1 LOCAL_RANK=0 \
 MASTER_ADDR=localhost MASTER_PORT=29500 \
-python ${wspace}/MegatronLM/pretrain_gpt.py \
+python ${codedir}pretrain_gpt.py \
     --save              $CKPT_DIR \
     --num-layers        $NUM_LAYERS \
     --hidden-size       $HIDDEN_SIZE \
