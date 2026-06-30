@@ -9,7 +9,7 @@ from .utils import is_hybrid_model, print_rank_0
 NUM_BYTES_IN_MEGABYTE = 1024 * 1024
 
 
-def compute_weight_and_optimizer_memory(args, verbose=False):
+def compute_weight_and_optimizer_memory(args, verbose=False) -> tuple[float, dict]:
     # Attention projection size.
     query_projection_size = args.kv_channels * args.num_attention_heads
     query_projection_to_hidden_size_ratio = query_projection_size / args.hidden_size
@@ -302,7 +302,16 @@ def compute_weight_and_optimizer_memory(args, verbose=False):
         * num_bytes_per_parameter(expert_data_parallel_size)
     )
 
-    return weight_and_optimizer_memory
+
+    stats = {
+        "params_transformer_block_B": num_parameters_in_transformer_block / 10**9,
+        "active_params_transformer_block_B": num_active_parameters_in_transformer_block / 10**9,
+        "params_embedding_B": num_parameters_in_embedding_layers / 10**9,
+        "total_params_B": num_total_parameters / 10**9,
+        "total_active_params_B": num_active_parameters / 10**9,
+        # add most-loaded-shard value computed near L270
+    }
+    return weight_and_optimizer_memory, stats
 
 
 def compute_activation_memory(args, num_microbatches, verbose=False):
@@ -453,13 +462,14 @@ def compute_activation_memory_without_sp(args, num_microbatches, verbose=False):
     return total_activation_memory
 
 
-def report_theoretical_memory(args, num_microbatches=None, verbose=False):
+def report_theoretical_memory(args, num_microbatches=None, verbose=False) -> tuple[float, float, float, dict]:
     if is_hybrid_model(args):
         print("Theoretical memory footprints not yet supported for hybrid Mamba-Transformer models.")
         return
 
+    _compute_weight_and_optimizer_memory, _stats = compute_weight_and_optimizer_memory(args, verbose=verbose)
     weight_and_optimizer_memory = (
-        compute_weight_and_optimizer_memory(args, verbose=verbose) / NUM_BYTES_IN_MEGABYTE
+        _compute_weight_and_optimizer_memory / NUM_BYTES_IN_MEGABYTE
     )
 
     # Choose the appropriate activation memory calculation based on parallelism strategy
@@ -483,4 +493,4 @@ def report_theoretical_memory(args, num_microbatches=None, verbose=False):
         f"activation={activation_memory:.2f} MB, total={total_memory:.2f} MB\n"
     )
 
-    return weight_and_optimizer_memory, activation_memory, total_memory
+    return weight_and_optimizer_memory, activation_memory, total_memory, _stats

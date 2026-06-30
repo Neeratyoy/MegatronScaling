@@ -12,15 +12,15 @@ module load cuda/13.0
 #######################
 
 # Model
-NUM_LAYERS=4
-HIDDEN_SIZE=256
-NUM_ATTENTION_HEADS=4
-SEQ_LENGTH=512
+NUM_LAYERS=8
+HIDDEN_SIZE=512
+NUM_ATTENTION_HEADS=8
+SEQ_LENGTH=1024
  
 # Training
 MICRO_BATCH_SIZE=4
-GLOBAL_BATCH_SIZE=4
-TRAIN_ITERS=50
+GLOBAL_BATCH_SIZE=16
+TRAIN_ITERS=500
 
 # LR schedule
 LR=3e-4
@@ -33,8 +33,8 @@ NORMALIZATION=LayerNorm       # LayerNorm | RMSNorm
  
 # Logging & checkpointing
 LOG_INTERVAL=10
-SAVE_INTERVAL=50
-EVAL_INTERVAL=25
+SAVE_INTERVAL=100
+EVAL_INTERVAL=100
 EVAL_ITERS=5
 
 #######################
@@ -42,9 +42,10 @@ EVAL_ITERS=5
 CKPT_DIR="${wspace}/results/debug/gpt_synthetic"
 
 # the run
-RANK=0 WORLD_SIZE=1 LOCAL_RANK=0 \
-MASTER_ADDR=localhost MASTER_PORT=29500 \
-python ${codedir}pretrain_gpt.py \
+# RANK=0 WORLD_SIZE=1 LOCAL_RANK=0 \
+# MASTER_ADDR=localhost MASTER_PORT=29500 \
+# python ${codedir}pretrain_gpt.py \
+torchrun --nproc_per_node=2 pretrain_gpt.py \
     --save              $CKPT_DIR \
     --num-layers        $NUM_LAYERS \
     --hidden-size       $HIDDEN_SIZE \

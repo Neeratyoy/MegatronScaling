@@ -2,6 +2,8 @@
 
 """Pretrain utilities."""
 import argparse
+import json
+import os
 import time
 
 from megatron.training.config.container import PretrainConfigContainer
@@ -2665,6 +2667,9 @@ def training_log(
         ) / (
             elapsed_time_per_iteration * 10**12 * args.world_size
         )
+        if total_real_tokens_in_batch is None:
+            total_real_tokens_in_batch = batch_size * args.seq_length
+        tokens_per_gpu_per_sec = total_real_tokens_in_batch / (elapsed_time_per_iteration * args.world_size)
 
         one_logger_utils.track_e2e_metrics(args.log_throughput, throughput)
 
@@ -2691,6 +2696,8 @@ def training_log(
             if args.log_timers_to_tensorboard:
                 if writer:
                     writer.add_scalar('throughput', throughput, iteration)
+                    writer.add_scalar('tokenput', tokens_per_gpu_per_sec, iteration)
+                    writer.add_scalar('runtime', time.time() - _TRAIN_START_TIME, iteration)
                 if wandb_writer:
                     wandb_writer.log({'throughput': throughput}, iteration)
         if args.log_energy:
@@ -2747,7 +2754,10 @@ def training_log(
             # Report memory after optimizer state has been initialized.
             if torch.distributed.get_rank() == 0:
                 num_microbatches = get_num_microbatches()
-                report_theoretical_memory(args, num_microbatches=num_microbatches, verbose=True)
+                wo, act, tot, stats = report_theoretical_memory(args, num_microbatches=num_microbatches, verbose=True)
+                with open(os.path.join(args.save, "model_stats.json"), "w") as f:
+                    json.dump({**stats, "weight_opt_MB": wo, "activation_MB": act, "total_MB": tot}, f, indent=2)
+
             report_memory(f'(after {iteration} iterations)')
             reported_memory_in_this_iteration = True
             loaded_iteration = max(get_loaded_iteration() or 0, 0)
