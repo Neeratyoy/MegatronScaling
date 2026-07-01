@@ -8,7 +8,9 @@ import warnings
 from contextlib import contextmanager
 from datetime import datetime
 from collections import defaultdict
+from pathlib import Path
 from typing import Optional
+import yaml
 
 import torch
 
@@ -47,6 +49,30 @@ from megatron.core.utils import (
 )
 
 from megatron.core.transformer.module import param_is_not_shared
+
+
+def dump_run_config_json(args: Optional[object] = None) -> None:
+    args = get_args() if args is None else args
+    cfg = {k: v for k, v in vars(args).items()}
+    # drop things that aren't serializable (tensors, callables, etc.)
+    def clean(v):
+        try:
+            if isinstance(v, Path):
+                v = str(v)
+            json.dumps(v)
+            return v
+        except (TypeError, ValueError):
+            return str(v)
+    cfg = {k: clean(v) for k, v in cfg.items()}
+
+    out_dir = getattr(args, 'save', None)
+    if out_dir is not None:
+        out_dir = Path(out_dir) if not isinstance(out_dir, Path) else out_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # with open(out_dir.absolute() / "run_config.yaml", "w") as f:
+        #     yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=True)
+        with open(out_dir.absolute() / "run_config.json", "w") as f:
+            json.dump(cfg, f, indent=2)
 
 
 def calc_params_l2_norm(model, force_create_fp32_copy=False):

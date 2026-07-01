@@ -1,0 +1,29 @@
+VOCAB_SIZE=256
+
+# Model
+NUM_LAYERS=4
+HIDDEN_SIZE=256
+NUM_ATTENTION_HEADS=8
+SEQ_LENGTH=512
+ 
+# Training
+MICRO_BATCH_SIZE=4
+GLOBAL_BATCH_SIZE=32
+TRAIN_ITERS=100
+
+# LR schedule
+LR=3e-4
+LR_WARMUP_FRACTION=0.1
+LR_DECAY_STYLE=WSD        # cosine | linear | constant
+LR_DECAY_ITERS=20
+MIN_LR=3e-5
+LR_WSD_DECAY_STYLE=linear
+ 
+# Norm — edit to experiment
+NORMALIZATION=LayerNorm       # LayerNorm | RMSNorm
+ 
+# Logging & checkpointing
+LOG_INTERVAL=25
+SAVE_INTERVAL=100
+EVAL_INTERVAL=25
+EVAL_ITERS=5

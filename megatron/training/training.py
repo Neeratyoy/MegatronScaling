@@ -230,6 +230,7 @@ from .utils import (
     append_to_progress_log,
     calc_params_l2_norm,
     check_adlr_autoresume_termination,
+    dump_run_config_json,
     is_last_rank,
     logical_and_across_model_parallel_group,
     print_rank_0,
@@ -1069,6 +1070,9 @@ def pretrain(
 
     args = get_args()
     timers = get_timers()
+
+    if args.rank == 0 and args.save:
+        dump_run_config_json(args)
 
     if args.fine_grained_activation_offloading:
         from megatron.core.pipeline_parallel.utils import set_ideal_affinity_for_current_gpu

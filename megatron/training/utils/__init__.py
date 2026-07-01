@@ -24,6 +24,7 @@ from megatron.training.utils.common_utils import (
     get_nvtx_range,
     has_nvrx_installed,
     has_nvrx_checkpointing_async_support,
+    dump_run_config_json,
 )
 
 from megatron.training.utils.log_utils import append_to_progress_log
