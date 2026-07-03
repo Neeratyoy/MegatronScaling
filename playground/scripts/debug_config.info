@@ -18,6 +18,7 @@ LR_DECAY_STYLE=WSD        # cosine | linear | constant
 LR_DECAY_ITERS=20
 MIN_LR=3e-5
 LR_WSD_DECAY_STYLE=linear
+WEIGHT_DECAY=1e-2
  
 # Norm — edit to experiment
 NORMALIZATION=LayerNorm       # LayerNorm | RMSNorm
