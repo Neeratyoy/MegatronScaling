@@ -257,6 +257,29 @@ def _get_block_submodules(
         raise Exception(f"specialize for {type(spec).__name__}.")
 
 
+class AttnResValues:
+
+    def __init__(self, h1: Tensor, group_size: int = 1):
+        # the input-embedding hidden state that is always the first block entry
+        self.blocks = [h1]
+        self.partial = None
+        self.count = 0
+        self.group_size = group_size  # L/B: number of layers per block
+
+    def values(self):
+        # stack the past-blocks and the current iterating block
+        return self.blocks if self.partial is None else self.blocks + [self.partial]
+    
+    def update(self, delta: Tensor):
+        # add layer activations for each block
+        self.partial = delta if self.partial is None else self.partial + delta
+        self.count += 1  # tracks the number of layers added per block
+        if self.count == self.group_size:      # finalize b_n (eq 5)
+            self.blocks.append(self.partial)
+            # reset for the next block
+            self.partial, self.count = None, 0
+
+
 class TransformerBlock(GraphableMegatronModule, MegatronModule):
     """Transformer class."""
 
@@ -670,21 +693,11 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                         ## Equation 1-4 from https://arxiv.org/abs/2603.15031
                         if self.attention_residuals:
                             if l_no == 0:
-                                attn_res_past = [hidden_states]  # [s, b, h] 
+                                # attn_res_past = [hidden_states]  # [s, b, h] 
+                                attn_res = AttnResValues(hidden_states, self.config.num_layers // self.attn_res_blocks)
                             else:
-                                # current query 
-                                q = self.attn_res_queries[l_no]  # [h]
-                                # collecting hidden states from [0, l-1] layers
-                                K = torch.stack(attn_res_past, dim=2)   # [s, b, l_no+1, h]
-                                # normalizing K pre-attention
-                                K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
-                                # computing attention of layer l over layers [0, l-1]
-                                logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, l_no+1]
-                                alphas = torch.softmax(logits, dim=-1)  # [s, b, l_no+1]
-                                # updating hidden state given the past hidden states
-                                hidden_states = torch.einsum('sbi,sbid->sbd', alphas, K)  # [s, b, h]
-                            # placeholder for the next layer hidden state, updated after layer forward
-                            attn_res_past.append(hidden_states)  # [s, b, h]
+                                hidden_states = self._attn_res(l_no, attn_res.values())
+                            _layer_input = hidden_states
 
                         # main layer forward
                         hidden_states, context = layer(
@@ -704,7 +717,7 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                         )
                         if self.attention_residuals:
                             # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
-                            attn_res_past[-1] = hidden_states - attn_res_past[-1]  # [s, b, h]
+                            attn_res.update(hidden_states - _layer_input)  # [s, b, h]
 
                     if (
                         torch.is_grad_enabled()
@@ -827,3 +840,17 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                 )
 
         return sharded_state_dict
+
+    def _attn_res(self, layer_idx: int, value_history: list[Tensor]) -> Tensor:
+        # current query 
+        q = self.attn_res_queries[layer_idx]  # [width]
+        # collecting hidden states from [0, l-1] layers
+        K = torch.stack(value_history, dim=2)   # [s, b, l_no+1, width]
+        # normalizing K pre-attention
+        K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
+        # computing attention of layer l over layers [0, l-1]
+        logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, l_no+1]
+        alphas = torch.softmax(logits, dim=-1)  # [s, b, l_no+1]
+        hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)
+        return hidden_state
+        
