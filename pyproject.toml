@@ -36,6 +36,8 @@ dependencies = [
     "fastparquet>=2026.5.0",
     "jupyter>=1.1.1",
     "matplotlib>=3.11.0",
+    "huggingface-hub[hf-transfer]>=1.16.1",
+    "hf-transfer>=0.1.9",
 ]
 authors = [{ name = "NVIDIA", email = "nemo-toolkit@nvidia.com" }]
 maintainers = [{ name = "NVIDIA", email = "nemo-toolkit@nvidia.com" }]
