@@ -286,6 +286,13 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         self.post_process = post_process
         self.vp_stage = vp_stage
 
+        # Residual attention
+        self.attention_residuals = config.attention_residuals
+        self.attn_res_blocks = config.attn_res_blocks
+        self.attn_res_queries = torch.nn.Parameter(
+            torch.zeros((config.attn_res_blocks, config.hidden_size)), requires_grad=True
+        ) if config.attention_residuals else None
+        
         # required for pipeline parallel schedules
         self.input_tensor = None
 
@@ -548,7 +555,7 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         """
 
         inference_context = deprecate_inference_params(inference_context, inference_params)
-        # Remove 'dynamic_inference_decode_only' from kwargs if present
+        # Remove 'dynamic_inference_decode_only' from kwargs≠ if present
         # this is only used to uniquely identify decode and non-decode cuda graph
         # runners in the cuda graph manager
 
@@ -658,6 +665,28 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                         inner_quantization_context = nullcontext()
 
                     with self.offload_context, inner_quantization_context:
+
+                        # residual attention to transform the input from past layers' information
+                        ## Equation 1-4 from https://arxiv.org/abs/2603.15031
+                        if self.attention_residuals:
+                            if l_no == 0:
+                                attn_res_past = [hidden_states]  # [s, b, h] 
+                            else:
+                                # current query 
+                                q = self.attn_res_queries[l_no]  # [h]
+                                # collecting hidden states from [0, l-1] layers
+                                K = torch.stack(attn_res_past, dim=2)   # [s, b, l_no, h]
+                                # normalizing K pre-attention
+                                K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
+                                # computing attention of layer l over layers [0, l-1]
+                                logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, l_no]
+                                alphas = torch.softmax(logits, dim=-1)  # [s, b, l_no]
+                                # updating hidden state given the past hidden states
+                                hidden_states = torch.einsum('sbi,sbid->sbd', alphas, K)  # [s, b, h]
+                            # placeholder for the next layer hidden state
+                            attn_res_past.append(hidden_states)  # [s, b, h]
+
+                        # main layer forward
                         hidden_states, context = layer(
                             hidden_states=hidden_states,
                             attention_mask=attention_mask,
@@ -673,6 +702,10 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             sequence_len_offset=sequence_len_offset,
                             padding_mask=padding_mask,
                         )
+                        if self.attention_residuals:
+                            # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
+                            attn_res_past[-1] = hidden_states - attn_res_past[-1]  # [s, b, h]
+                            print("Updated state for residual attention")
 
                     if (
                         torch.is_grad_enabled()

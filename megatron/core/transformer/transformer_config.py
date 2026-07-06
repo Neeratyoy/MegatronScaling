@@ -283,6 +283,18 @@ class TransformerConfig(ModelParallelConfig):
     experimental_attention_variant: Optional[Literal['gated_delta_net', 'dsa']] = None
     """Type of attention variant to use. Currently support gated_delta_net and dsa."""
 
+    attention_residuals: bool = False
+    """Replace the residual stream with learned attention over previous layers.
+    Taken from https://arxiv.org/abs/2603.15031
+    """
+
+    attn_res_blocks: Optional[int] = None
+    """Number of residual blocks to use in attention residuals. 
+    If None, defaults to 2L, that is, each attention and MLP blocks are treated separately.
+    For any block < L, this number determines the effective size of dimensions over layers for 
+    attentions, with each module with the block summed to represent the block.
+    """
+
     ####################
     # DSA
     ####################
@@ -2611,6 +2623,13 @@ class TransformerConfig(ModelParallelConfig):
             assert (
                 self.attention_backend == AttnBackend.flash
             ), "Batch invariant mode only supports FlashAttention"
+
+        if self.attention_residuals:
+            if self.attn_res_blocks is None:
+                self.attn_res_blocks = self.num_layers  # TODO: check if this should be 2L?
+            assert (
+                self.attn_res_blocks <= self.num_layers
+            ), "attn_res_blocks must be less than or equal to num_layers." 
 
 
 @dataclass
