@@ -2628,8 +2628,8 @@ class TransformerConfig(ModelParallelConfig):
             if self.attn_res_blocks is None:
                 self.attn_res_blocks = self.num_layers  # TODO: check if this should be 2L?
             assert (
-                self.attn_res_blocks <= self.num_layers
-            ), "attn_res_blocks must be less than or equal to num_layers." 
+                self.attn_res_blocks == self.num_layers
+            ), "attn_res_blocks must be equal to num_layers."
 
 
 @dataclass
