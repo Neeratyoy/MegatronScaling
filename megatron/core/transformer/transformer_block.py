@@ -741,8 +741,6 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
                             attn_res.update(hidden_states - _layer_input)  # [s, b, h]
 
-                            print(f"Layer {layer.layer_number}; attn_res count: {attn_res.count}, blocks: {len(attn_res.blocks)}, values: {len(attn_res.values())}")
-
                     if (
                         torch.is_grad_enabled()
                         and self.config.cpu_offloading
@@ -866,15 +864,29 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         return sharded_state_dict
 
     def _attn_res(self, layer: TransformerLayer, layer_idx: int, value_history: list[Tensor]) -> Tensor:
-        # current query 
-        q = layer.attn_res_query[layer_idx]  # [width]
-        # collecting hidden states from [0, l-1] layers
-        K = torch.stack(value_history, dim=2)   # [s, b, 1, width]
-        # normalizing K pre-attention
+        """Attention over depth (eqs 2-4, arXiv:2603.15031): computes the input to a
+        sublayer as a softmax-weighted mixture of past block values.
+
+        Args:
+            layer: The TransformerLayer whose query to use.
+            layer_idx: Sublayer index within the layer (0 = attention, 1 = MLP).
+            value_history: Block values per eq 6 — [b_0=h_1, b_1, ..., (partial)],
+                each of shape [s, b, h]. Length is at most attn_res_blocks + 1.
+
+        Returns:
+            The mixed hidden states [s, b, h] to feed the sublayer (eq 4).
+        """
+        # this sublayer's learnable query q_l = w_l (eq 3)
+        q = layer.attn_res_query[layer_idx]  # [h]
+        # keys/values: stack the current block values; n = len(value_history) varies
+        # per call and is capped at attn_res_blocks + 1
+        K = torch.stack(value_history, dim=2)  # [s, b, n, h]
+        # RMSNorm inside phi (eq 2) — applied to keys only, so large-magnitude
+        # block values cannot dominate the attention logits
         K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
-        # computing attention of layer l over layers [0, l-1]
-        logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, 1]
-        alphas = torch.softmax(logits, dim=-1)  # [s, b, 1]
-        hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)
+        # per-token attention logits of this sublayer over the n block values
+        logits = torch.einsum('d,sbid->sbi', q, K_norm)  # [s, b, n]
+        alphas = torch.softmax(logits, dim=-1)  # [s, b, n], sums to 1 over depth
+        # eq 4: mixture uses the raw (un-normalized) values
+        hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)  # [s, b, h]
         return hidden_state
-        

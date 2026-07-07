@@ -512,7 +512,9 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
             and not isinstance(self.pre_mlp_layernorm, IdentityOp)
         )
 
-        # Handling AttentionResiduals: adding a per-layer parameter for the `queries`
+        # [Handling AttentionResiduals] adding a per-layer parameter for the `queries`
+        # creates a per-layer `2xhidden_size` parameter that is used to store the learned `queries`
+        # used for soft-attention over the previous layers
         self.attn_res_query = torch.nn.Parameter(
             torch.zeros(2, self.config.hidden_size), requires_grad=True,
         )
