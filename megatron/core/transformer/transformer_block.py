@@ -347,10 +347,14 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         self._build_layers()
         self.num_layers_per_pipeline_rank = len(self.layers)
 
-        # Output Layer Attention Residual Query
+        # Output Layer Attention Residual Query.
+        # Only the stage that owns the output side of the model (post_process=True,
+        # same stage as final_layernorm) performs the final output mix, so only that
+        # stage gets the query parameter. On intermediate pipeline stages this stays
+        # None, which also makes the final-mix guard in forward() fail naturally.
         self.attn_res_final_query = torch.nn.Parameter(
             torch.zeros(self.config.hidden_size)
-        ) if config.attention_residuals else None
+        ) if (config.attention_residuals and self.post_process) else None
 
     def _build_layers(self):
         # Transformer layers.
@@ -757,8 +761,12 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                     if (l_no + layer_offset) in extract_layer_indices:
                         intermediate_hidden_states.append(hidden_states)
 
-        if self.config.attention_residuals:
-            # to ensure the final output also gets to attend to all previous layers
+        # Final output mix: the head, like every sublayer, receives an attention-
+        # weighted mixture over the block values rather than the raw last-sublayer
+        # output. Restricted to the post_process stage — the one that owns
+        # final_layernorm and feeds the output layer; on intermediate pipeline
+        # stages the raw hidden_states must flow to the next stage untouched.
+        if self.config.attention_residuals and self.post_process:
             hidden_states = self._attn_res(None, None, attn_res.values(), query_tensor=self.attn_res_final_query)
 
         # Final layer norm.

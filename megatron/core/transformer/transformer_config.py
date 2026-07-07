@@ -2625,6 +2625,14 @@ class TransformerConfig(ModelParallelConfig):
             ), "Batch invariant mode only supports FlashAttention"
 
         if self.attention_residuals:
+            # AttnRes runtime state (`attn_res` in TransformerBlock.forward) is only
+            # created in the non-recompute layer loop; with full recompute the layers
+            # run inside checkpointed_forward and the final output mix would hit an
+            # undefined variable. Fail at config time with a clear message instead.
+            assert self.recompute_granularity != 'full', (
+                "attention_residuals is not supported with --recompute-granularity full "
+                "(the recompute path bypasses the AttnRes mixing code)."
+            )
             if self.attn_res_blocks is None:
                 self.attn_res_blocks = 2 * self.num_layers
             assert (
