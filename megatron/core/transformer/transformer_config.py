@@ -2626,11 +2626,11 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.attention_residuals:
             if self.attn_res_blocks is None:
-                self.attn_res_blocks = self.num_layers  # TODO: check if this should be 2L?
+                self.attn_res_blocks = 2 * self.num_layers
             assert (
-                self.attn_res_blocks <= self.num_layers
-            ), "attn_res_blocks must be equal to num_layers."
-            self.attn_res_group_per_block = (self.num_layers + self.attn_res_blocks - 1) // self.attn_res_blocks
+                self.attn_res_blocks <= 2 * self.num_layers
+            ), "attn_res_blocks must be less-than-equal to 2*num_layers."
+            self.attn_res_group_per_block = ((2 * self.num_layers) + self.attn_res_blocks - 1) // self.attn_res_blocks
 
 
 @dataclass

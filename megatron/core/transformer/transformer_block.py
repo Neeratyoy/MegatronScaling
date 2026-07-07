@@ -29,6 +29,7 @@ from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.transformer_layer import (
     BaseTransformerLayer,
     get_transformer_layer_offset,
+    TransformerLayer,
 )
 from megatron.core.transformer.utils import sharded_state_dict_default
 from megatron.core.typed_torch import apply_module, not_none
@@ -312,10 +313,6 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         # Residual attention
         self.attention_residuals = config.attention_residuals
         self.attn_res_blocks = config.attn_res_blocks
-        self.attn_res_queries = torch.nn.Parameter(
-            torch.zeros((config.num_layers, config.hidden_size)), requires_grad=True
-        ) if config.attention_residuals else None
-        
         # required for pipeline parallel schedules
         self.input_tensor = None
 
@@ -693,32 +690,58 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                         ## Equation 1-4 from https://arxiv.org/abs/2603.15031
                         if self.attention_residuals:
                             if l_no == 0:
-                                # attn_res_past = [hidden_states]  # [s, b, h] 
-                                _groups = self.config.attn_res_group_per_block
-                                attn_res = AttnResValues(hidden_states, _groups)
+                                attn_res = AttnResValues(hidden_states, self.config.attn_res_group_per_block)
                             else:
-                                hidden_states = self._attn_res(l_no, attn_res.values())
+                                hidden_states = self._attn_res(layer, 0, attn_res.values())
                             _layer_input = hidden_states
 
                         # main layer forward
-                        hidden_states, context = layer(
-                            hidden_states=hidden_states,
-                            attention_mask=attention_mask,
-                            context=context,
-                            context_mask=context_mask,
-                            rotary_pos_emb=rotary_pos_emb,
-                            rotary_pos_cos=rotary_pos_cos,
-                            rotary_pos_sin=rotary_pos_sin,
-                            rotary_pos_cos_sin=rotary_pos_cos_sin,
-                            attention_bias=attention_bias,
-                            inference_context=inference_context,
-                            packed_seq_params=packed_seq_params,
-                            sequence_len_offset=sequence_len_offset,
-                            padding_mask=padding_mask,
-                        )
-                        if self.attention_residuals:
+                        if not self.attention_residuals:
+                            hidden_states, context = layer(
+                                hidden_states=hidden_states,
+                                attention_mask=attention_mask,
+                                context=context,
+                                context_mask=context_mask,
+                                rotary_pos_emb=rotary_pos_emb,
+                                rotary_pos_cos=rotary_pos_cos,
+                                rotary_pos_sin=rotary_pos_sin,
+                                rotary_pos_cos_sin=rotary_pos_cos_sin,
+                                attention_bias=attention_bias,
+                                inference_context=inference_context,
+                                packed_seq_params=packed_seq_params,
+                                sequence_len_offset=sequence_len_offset,
+                                padding_mask=padding_mask,
+                            )
+                        else:
+                            hidden_states, context = layer._forward_attention(
+                                hidden_states=hidden_states,
+                                attention_mask=attention_mask,
+                                context=context,
+                                context_mask=context_mask,
+                                rotary_pos_emb=rotary_pos_emb,
+                                rotary_pos_cos=rotary_pos_cos,
+                                rotary_pos_sin=rotary_pos_sin,
+                                rotary_pos_cos_sin=rotary_pos_cos_sin,
+                                attention_bias=attention_bias,
+                                inference_context=inference_context,
+                                packed_seq_params=packed_seq_params,
+                                sequence_len_offset=sequence_len_offset,
+                                padding_mask=padding_mask,
+                            )
                             # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
                             attn_res.update(hidden_states - _layer_input)  # [s, b, h]
+                            hidden_states = self._attn_res(layer, 1, attn_res.values())
+                            _layer_input = hidden_states
+                            
+                            hidden_states = layer._forward_mlp(
+                                hidden_states=hidden_states,
+                                inference_context=inference_context,
+                                padding_mask=padding_mask,
+                            )
+                            # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
+                            attn_res.update(hidden_states - _layer_input)  # [s, b, h]
+
+                            print(f"Layer {layer.layer_number}; attn_res count: {attn_res.count}, blocks: {len(attn_res.blocks)}, values: {len(attn_res.values())}")
 
                     if (
                         torch.is_grad_enabled()
@@ -842,16 +865,16 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
 
         return sharded_state_dict
 
-    def _attn_res(self, layer_idx: int, value_history: list[Tensor]) -> Tensor:
+    def _attn_res(self, layer: TransformerLayer, layer_idx: int, value_history: list[Tensor]) -> Tensor:
         # current query 
-        q = self.attn_res_queries[layer_idx]  # [width]
+        q = layer.attn_res_query[layer_idx]  # [width]
         # collecting hidden states from [0, l-1] layers
-        K = torch.stack(value_history, dim=2)   # [s, b, l_no+1, width]
+        K = torch.stack(value_history, dim=2)   # [s, b, 1, width]
         # normalizing K pre-attention
         K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
         # computing attention of layer l over layers [0, l-1]
-        logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, l_no+1]
-        alphas = torch.softmax(logits, dim=-1)  # [s, b, l_no+1]
+        logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, 1]
+        alphas = torch.softmax(logits, dim=-1)  # [s, b, 1]
         hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)
         return hidden_state
         
