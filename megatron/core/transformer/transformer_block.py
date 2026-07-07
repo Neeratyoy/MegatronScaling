@@ -347,6 +347,11 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         self._build_layers()
         self.num_layers_per_pipeline_rank = len(self.layers)
 
+        # Output Layer Attention Residual Query
+        self.attn_res_final_query = torch.nn.Parameter(
+            torch.zeros(self.config.hidden_size)
+        ) if config.attention_residuals else None
+
     def _build_layers(self):
         # Transformer layers.
         # @jcasper can we improve how we deal with layer_number?
@@ -741,8 +746,6 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
                             attn_res.update(hidden_states - _layer_input)  # [s, b, h]
 
-                            print(f"Layer {layer.layer_number}; attn_res count: {attn_res.count}, blocks: {len(attn_res.blocks)}, values: {len(attn_res.values())}")
-
                     if (
                         torch.is_grad_enabled()
                         and self.config.cpu_offloading
@@ -753,6 +756,10 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                     # Extract intermediate embeddings using global layer index
                     if (l_no + layer_offset) in extract_layer_indices:
                         intermediate_hidden_states.append(hidden_states)
+
+        if self.config.attention_residuals:
+            # to ensure the final output also gets to attend to all previous layers
+            hidden_states = self._attn_res(None, None, attn_res.values(), query_tensor=self.attn_res_final_query)
 
         # Final layer norm.
         if self.final_layernorm is not None:
@@ -865,9 +872,15 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
 
         return sharded_state_dict
 
-    def _attn_res(self, layer: TransformerLayer, layer_idx: int, value_history: list[Tensor]) -> Tensor:
+    def _attn_res(
+        self, 
+        layer: TransformerLayer | None, 
+        layer_idx: int | None, 
+        value_history: list[Tensor], 
+        query_tensor: Optional[torch.nn.Parameter] = None
+    ) -> Tensor:
         # current query 
-        q = layer.attn_res_query[layer_idx]  # [width]
+        q = layer.attn_res_query[layer_idx] if query_tensor is None else query_tensor
         # collecting hidden states from [0, l-1] layers
         K = torch.stack(value_history, dim=2)   # [s, b, 1, width]
         # normalizing K pre-attention
@@ -877,4 +890,3 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         alphas = torch.softmax(logits, dim=-1)  # [s, b, 1]
         hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)
         return hidden_state
-        

@@ -2630,7 +2630,7 @@ class TransformerConfig(ModelParallelConfig):
             assert (
                 self.attn_res_blocks <= 2 * self.num_layers
             ), "attn_res_blocks must be less-than-equal to 2*num_layers."
-            self.attn_res_group_per_block = ((2 * self.num_layers) + self.attn_res_blocks - 1) // self.attn_res_blocks
+            self.attn_res_group_per_block = 2 * ((self.num_layers + self.attn_res_blocks - 1) // self.attn_res_blocks)
 
 
 @dataclass

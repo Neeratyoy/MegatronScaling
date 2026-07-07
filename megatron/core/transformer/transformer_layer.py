@@ -515,7 +515,7 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # Handling AttentionResiduals: adding a per-layer parameter for the `queries`
         self.attn_res_query = torch.nn.Parameter(
             torch.zeros(2, self.config.hidden_size), requires_grad=True,
-        )
+        ) if self.config.attention_residuals else None
 
         # @jcasper how should we handle nvfuser?
         # Set bias+dropout+add fusion grad_enable execution handler.
