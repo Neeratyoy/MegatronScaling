@@ -313,7 +313,7 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         self.attention_residuals = config.attention_residuals
         self.attn_res_blocks = config.attn_res_blocks
         self.attn_res_queries = torch.nn.Parameter(
-            torch.zeros((config.attn_res_blocks, config.hidden_size)), requires_grad=True
+            torch.zeros((config.num_layers, config.hidden_size)), requires_grad=True
         ) if config.attention_residuals else None
         
         # required for pipeline parallel schedules
@@ -694,7 +694,8 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                         if self.attention_residuals:
                             if l_no == 0:
                                 # attn_res_past = [hidden_states]  # [s, b, h] 
-                                attn_res = AttnResValues(hidden_states, self.config.num_layers // self.attn_res_blocks)
+                                _groups = self.config.attn_res_group_per_block
+                                attn_res = AttnResValues(hidden_states, _groups)
                             else:
                                 hidden_states = self._attn_res(l_no, attn_res.values())
                             _layer_input = hidden_states
