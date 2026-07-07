@@ -885,8 +885,9 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         K = torch.stack(value_history, dim=2)   # [s, b, 1, width]
         # normalizing K pre-attention
         K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
-        # computing attention of layer l over layers [0, l-1]
-        logits = torch.einsum('d,sbid->sbi', q, K_norm)   # [s, b, 1]
-        alphas = torch.softmax(logits, dim=-1)  # [s, b, 1]
-        hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)
+        # per-token attention logits of this sublayer over the n block values
+        logits = torch.einsum('d,sbid->sbi', q, K_norm)  # [s, b, n]
+        alphas = torch.softmax(logits, dim=-1)  # [s, b, n], sums to 1 over depth
+        # eq 4: mixture uses the raw (un-normalized) values
+        hidden_state = torch.einsum('sbi,sbid->sbd', alphas, K)  # [s, b, h]
         return hidden_state
