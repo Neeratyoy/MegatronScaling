@@ -1737,6 +1737,10 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     num_parameters = sum(
         [sum([p.nelement() for p in model_module.parameters()]) for model_module in model]
     )
+    # Stash the local parameter count for 6N-convention throughput logging
+    # (see training_log). At TP=PP=1 this is the full model size N.
+    args = get_args()
+    args._num_parameters_this_rank = num_parameters
     if get_pg_rank(pg_collection.dp) == 0 and get_pg_rank(pg_collection.cp) == 0:
         print(
             ' > number of parameters on (tensor, pipeline) '
@@ -2697,9 +2701,18 @@ def training_log(
         )
         if args.log_throughput:
             log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
+            # 6N-convention throughput (Kaplan-style model FLOPs, as reported by
+            # e.g. open-sci-ref): 6 FLOPs per parameter per token (2N forward +
+            # 4N backward), ignoring attention's seq^2 term and all other
+            # non-parameter FLOPs. Comparable across codebases, unlike the
+            # detailed accounting in num_floating_point_operations above.
+            num_params = getattr(args, '_num_parameters_this_rank', 0)
+            throughput_6n = 6 * num_params * tokens_per_gpu_per_sec / 10**12
+            log_string += f' throughput 6N (TFLOP/s/GPU): {throughput_6n:.1f} |'
             if args.log_timers_to_tensorboard:
                 if writer:
                     writer.add_scalar('throughput', throughput, iteration)
+                    writer.add_scalar('throughput_6n', throughput_6n, iteration)
                     writer.add_scalar('tokenput', tokens_per_gpu_per_sec, iteration)
                     writer.add_scalar('runtime', time.time() - _TRAIN_START_TIME, iteration)
                 if wandb_writer:
