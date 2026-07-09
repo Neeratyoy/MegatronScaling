@@ -283,16 +283,23 @@ class TransformerConfig(ModelParallelConfig):
     experimental_attention_variant: Optional[Literal['gated_delta_net', 'dsa']] = None
     """Type of attention variant to use. Currently support gated_delta_net and dsa."""
 
+    #####################
+    # attention residuals
+    #####################
     attention_residuals: bool = False
     """Replace the residual stream with learned attention over previous layers.
     Taken from https://arxiv.org/abs/2603.15031
     """
 
     attn_res_blocks: Optional[int] = None
-    """Number of residual blocks to use in attention residuals. 
-    If None, defaults to 2L, that is, each attention and MLP blocks are treated separately.
-    For any block < L, this number determines the effective size of dimensions over layers for 
-    attentions, with each module with the block summed to represent the block.
+    """"Number of blocks for Block AttnRes, where each block sums whole layers. 
+    None → Full AttnRes: every attention/MLP sublayer output is an individual value.
+    If set, the number of blocks must be less than or equal to the number of layers.
+    """
+
+    attn_res_group_per_block: Optional[int] = None
+    """Derived in post_init from attn_res_blocks; DO NOT SET. 
+    Sublayer deltas per block value: 1 = Full, 2·⌈L/N⌉ = Block.
     """
 
     ####################
@@ -2634,11 +2641,15 @@ class TransformerConfig(ModelParallelConfig):
                 "(the recompute path bypasses the AttnRes mixing code)."
             )
             if self.attn_res_blocks is None:
-                self.attn_res_blocks = 2 * self.num_layers
-            assert (
-                self.attn_res_blocks <= 2 * self.num_layers
-            ), "attn_res_blocks must be less-than-equal to 2*num_layers."
-            self.attn_res_group_per_block = 2 * ((self.num_layers + self.attn_res_blocks - 1) // self.attn_res_blocks)
+                self.attn_res_group_per_block = 1   
+            else:
+                assert (
+                    self.attn_res_blocks <= self.num_layers
+                ), "attn_res_blocks must be less-than-equal to num_layers."
+                # the factor of 2 multiplied is to ensure that no block is splitting the 
+                # true-Transformer layer such that the MHA and MLP from a layer is in separate blocks
+                self.attn_res_group_per_block = 2 * ((self.num_layers + self.attn_res_blocks - 1) // self.attn_res_blocks)
+            
 
 
 @dataclass

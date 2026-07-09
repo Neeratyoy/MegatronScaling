@@ -261,19 +261,28 @@ def _get_block_submodules(
 class AttnResValues:
 
     def __init__(self, h1: Tensor, group_size: int = 1):
+        """
+        Args:
+            h1 (Tensor): The hidden state of the first block entry.
+            group_size (int, optional): The number of layers per block. 
+                Defaults to 1. Representing Full Attention Residuals.
+                For all group_size > 1, group_size % 2 == 0.
+        """
         # the input-embedding hidden state that is always the first block entry
         self.blocks = [h1]
         self.partial = None
         self.count = 0
-        self.group_size = group_size  # L/B: number of layers per block
+        self.group_size = group_size 
 
     def values(self):
         # stack the past-blocks and the current iterating block
         return self.blocks if self.partial is None else self.blocks + [self.partial]
     
-    def update(self, delta: Tensor):
+    def update(self, v_l: Tensor):
         # add layer activations for each block
-        self.partial = delta if self.partial is None else self.partial + delta
+        ## the `partial + v_l` is crucial for intermediate layers in a block for 
+        # Block Attention Residual to attend to the immediate previous layer's output
+        self.partial = v_l if self.partial is None else self.partial + v_l
         self.count += 1  # tracks the number of layers added per block
         if self.count == self.group_size:      # finalize b_n (eq 5)
             self.blocks.append(self.partial)
@@ -699,13 +708,16 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                         ## Equation 1-4 from https://arxiv.org/abs/2603.15031
                         if self.attention_residuals:
                             if l_no == 0:
-                                attn_res = AttnResValues(hidden_states, self.config.attn_res_group_per_block)
+                                attn_res = AttnResValues(
+                                    h1=hidden_states, group_size=self.config.attn_res_group_per_block
+                                )
                             else:
                                 hidden_states = self._attn_res(layer, 0, attn_res.values())
                             _layer_input = hidden_states
 
                         # main layer forward
                         if not self.attention_residuals:
+                            # original megatron loop intact, when no residual attention
                             hidden_states, context = layer(
                                 hidden_states=hidden_states,
                                 attention_mask=attention_mask,
@@ -722,6 +734,7 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                                 padding_mask=padding_mask,
                             )
                         else:
+                            # attention residual handling per sub-layer component (the MHA)
                             hidden_states, context = layer._forward_attention(
                                 hidden_states=hidden_states,
                                 attention_mask=attention_mask,
@@ -742,6 +755,7 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             hidden_states = self._attn_res(layer, 1, attn_res.values())
                             _layer_input = hidden_states
                             
+                            # attention residual handling per sub-layer component (the MLP)
                             hidden_states = layer._forward_mlp(
                                 hidden_states=hidden_states,
                                 inference_context=inference_context,
@@ -749,6 +763,8 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             )
                             # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
                             attn_res.update(hidden_states - _layer_input)  # [s, b, h]
+
+                            print(f"Layer {l_no}; group_size: {attn_res.group_size} values: {len(attn_res.values())};")
 
                     if (
                         torch.is_grad_enabled()
@@ -761,13 +777,11 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                     if (l_no + layer_offset) in extract_layer_indices:
                         intermediate_hidden_states.append(hidden_states)
 
-        # Final output mix: the head, like every sublayer, receives an attention-
-        # weighted mixture over the block values rather than the raw last-sublayer
-        # output. Restricted to the post_process stage — the one that owns
-        # final_layernorm and feeds the output layer; on intermediate pipeline
-        # stages the raw hidden_states must flow to the next stage untouched.
+        # Final output attention residual
         if self.config.attention_residuals and self.post_process:
             hidden_states = self._attn_res(None, None, attn_res.values(), query_tensor=self.attn_res_final_query)
+            # here, no need to call `.update(...)` anymore
+            print(f"Layer {l_no}; group_size: {attn_res.group_size} values: {len(attn_res.values())};")
 
         # Final layer norm.
         if self.final_layernorm is not None:
