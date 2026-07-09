@@ -292,7 +292,7 @@ class TransformerConfig(ModelParallelConfig):
     """
 
     attn_res_blocks: Optional[int] = None
-    """"Number of blocks for Block AttnRes, where each block sums whole layers. 
+    """Number of blocks for Block AttnRes, where each block sums whole layers. 
     None → Full AttnRes: every attention/MLP sublayer output is an individual value.
     If set, the number of blocks must be less than or equal to the number of layers.
     """
@@ -2641,7 +2641,7 @@ class TransformerConfig(ModelParallelConfig):
                 "(the recompute path bypasses the AttnRes mixing code)."
             )
             if self.attn_res_blocks is None:
-                self.attn_res_group_per_block = 1   
+                self.attn_res_group_per_block = 1
             else:
                 assert (
                     self.attn_res_blocks <= self.num_layers
