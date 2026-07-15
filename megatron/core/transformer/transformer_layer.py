@@ -519,6 +519,19 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
             torch.zeros(2, self.config.hidden_size), requires_grad=True,
         ) if self.config.attention_residuals else None
 
+        # [Handling AttentionResiduals] RMSNorm inside phi (eq 2), one module per
+        # mixing site (0 = pre-attn, 1 = pre-MLP). `attn_res_learnable_norm` toggles
+        # the learnable per-channel weight via elementwise_affine; affine=False is
+        # the stateless norm, mathematically identical to affine=True at init.
+        self.attn_res_norms = torch.nn.ModuleList([
+            torch.nn.RMSNorm(
+                self.config.hidden_size,
+                eps=self.config.attn_res_norm_eps,
+                elementwise_affine=self.config.attn_res_learnable_norm,
+            )
+            for _ in range(2)
+        ]) if self.config.attention_residuals else None
+
         # @jcasper how should we handle nvfuser?
         # Set bias+dropout+add fusion grad_enable execution handler.
         # TORCH_MAJOR = int(torch.__version__.split('.')[0])

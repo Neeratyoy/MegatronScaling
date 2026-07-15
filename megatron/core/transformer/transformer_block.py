@@ -363,7 +363,15 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         # None, which also makes the final-mix guard in forward() fail naturally.
         self.attn_res_final_query = torch.nn.Parameter(
             torch.zeros(self.config.hidden_size)
-        ) if (config.attention_residuals and self.post_process) else None
+        ) if (self.config.attention_residuals and self.post_process) else None
+
+        # RMSNorm inside phi (eq 2) for the final output mix; learnability toggled
+        # via elementwise_affine. Same ownership rules as attn_res_final_query above.
+        self.attn_res_final_norm = torch.nn.RMSNorm(
+            self.config.hidden_size,
+            eps=self.config.attn_res_norm_eps,
+            elementwise_affine=self.config.attn_res_learnable_norm,
+        ) if (self.config.attention_residuals and self.post_process) else None
 
     def _build_layers(self):
         # Transformer layers.
@@ -764,8 +772,6 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             # f_l = output − input, since layer() returns h_l + f_l(h_l) (eq 3)
                             attn_res.update(hidden_states - _layer_input)  # [s, b, h]
 
-                            print(f"Layer {l_no}; group_size: {attn_res.group_size} values: {len(attn_res.values())};")
-
                     if (
                         torch.is_grad_enabled()
                         and self.config.cpu_offloading
@@ -779,9 +785,8 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
 
         # Final output attention residual
         if self.config.attention_residuals and self.post_process:
-            hidden_states = self._attn_res(None, None, attn_res.values(), query_tensor=self.attn_res_final_query)
+            hidden_states = self._attn_res(None, None, attn_res.values(), final_query=True)
             # here, no need to call `.update(...)` anymore
-            print(f"Layer {l_no}; group_size: {attn_res.group_size} values: {len(attn_res.values())};")
 
         # Final layer norm.
         if self.final_layernorm is not None:
@@ -899,14 +904,20 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         layer: TransformerLayer | None, 
         layer_idx: int | None, 
         value_history: list[Tensor], 
-        query_tensor: Optional[torch.nn.Parameter] = None
+        final_query: bool = False,
     ) -> Tensor:
-        # current query 
-        q = layer.attn_res_query[layer_idx] if query_tensor is None else query_tensor
-        # collecting hidden states from [0, l-1] layers
-        K = torch.stack(value_history, dim=2)   # [s, b, 1, width]
-        # normalizing K pre-attention
-        K_norm = torch.nn.functional.rms_norm(K, (K.shape[-1],), eps=1e-6)
+        # current query and phi-norm module, both from the same owner
+        if not final_query:
+            q = layer.attn_res_query[layer_idx]
+            norm = layer.attn_res_norms[layer_idx]
+        else:
+            q = self.attn_res_final_query
+            norm = self.attn_res_final_norm
+        # collecting the block values (eq 6); n = len(value_history) <= attn_res_blocks + 1
+        K = torch.stack(value_history, dim=2)   # [s, b, n, width]
+        # RMSNorm inside phi (eq 2), applied to keys only (learnability set at init
+        # via elementwise_affine)
+        K_norm = norm(K)
         # per-token attention logits of this sublayer over the n block values
         logits = torch.einsum('d,sbid->sbi', q, K_norm)  # [s, b, n]
         alphas = torch.softmax(logits, dim=-1)  # [s, b, n], sums to 1 over depth
