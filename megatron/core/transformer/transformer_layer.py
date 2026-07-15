@@ -518,8 +518,11 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         self.attn_res_query = torch.nn.Parameter(
             torch.zeros(2, self.config.hidden_size), requires_grad=True,
         ) if self.config.attention_residuals else None
+        if self.attn_res_query is not None:
+            # important for optimizer scan over parameters to apply weight decay
+            self.attn_res_query.no_wd_attn_res = not self.config.attn_res_query_weight_decay
 
-        # [Handling AttentionResiduals] RMSNorm inside phi (eq 2), one module per
+        # [Handling AttentionResiduals' RMSNorm] inside phi (eq 2), one module per
         # mixing site (0 = pre-attn, 1 = pre-MLP). `attn_res_learnable_norm` toggles
         # the learnable per-channel weight via elementwise_affine; affine=False is
         # the stateless norm, mathematically identical to affine=True at init.

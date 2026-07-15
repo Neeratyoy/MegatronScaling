@@ -311,6 +311,9 @@ class TransformerConfig(ModelParallelConfig):
     attn_res_norm_eps: float = 1e-6
     """Epsilon value for the RMSNorm inside the AttnRes score function."""
 
+    attn_res_query_weight_decay: bool = False
+    """If True, the AttnRes query vector is subject to weight decay applied to other parameters."""
+
     ####################
     # DSA
     ####################

@@ -117,6 +117,7 @@ def get_standard_config_overrides(config: OptimizerConfig) -> Dict[ParamKey, Par
         param_wd_mult_key = ParamKey(name="*.bias", predicate=param_length_1_match)
 
     config_overrides[param_wd_mult_key] = ParamGroupOverride(wd_mult=0.0)
+    config_overrides[ParamKey(attr="no_wd_attn_res")] = ParamGroupOverride(wd_mult=0.0)
 
     if config.decoupled_lr is not None:
         decoupled_lr_config: ParamGroupOverride = {"max_lr": config.decoupled_lr}
