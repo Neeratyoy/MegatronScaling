@@ -1,7 +1,10 @@
 import os
+import sys
 import pandas as pd
 from pathlib import Path
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+from playground.scripts.check_run_status import is_complete
 
 
 def dump_tensorboard_to_parquet(
@@ -59,10 +62,23 @@ if __name__ == "__main__":
         default="run_metrics.parquet", 
         help="Output Parquet file name"
     )
+    parser.add_argument(
+        "--on-complete",
+        action="store_true",
+        help="only dump if the run has reached train_iters; skip otherwise"
+    )
+    
     args = parser.parse_args()
 
     if not args.savedir:
         args.savedir = args.dir
+
+    if args.on_complete:
+        status = is_complete(Path(args.dir))
+        if status != 1:
+            label = {0: "incomplete", None: "unreadable"}[status]
+            print(f"Skipping ({label}): {args.dir}")
+            sys.exit(1)
 
     out_path = dump_tensorboard_to_parquet(args.dir, args.savedir, args.out_name)
     if out_path:
