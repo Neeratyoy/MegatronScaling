@@ -17,8 +17,11 @@ CONFIG_VARS_OF_INTEREST = [
     "seq_length",
     "micro_batch_size",
     "global_batch_size",
+    "weight_decay",
+    "lr_warmup_iters",
+    "lr_wsd_decay_iters",
     "vocab_size",
-    "seed"
+    "seed",
 ]
 DEFAULT_VOCAB_SIZE = 50304
 
@@ -60,6 +63,7 @@ def _read_parquet(path: Path, col: str = "lm loss") -> pd.DataFrame:
     df["total_params"] = _params["total_params"]
     df["embed_params"] = _params["embed_params"]
     df["run_type"] = path.parent.parent.name
+    df["total_tokens"] = df["global_batch_size"] * df["seq_length"] * df["step"]
 
     return df
 
