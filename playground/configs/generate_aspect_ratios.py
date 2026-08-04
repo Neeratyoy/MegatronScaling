@@ -8,25 +8,39 @@ from typing import Dict
 def param_counter(
     num_layers: int,
     hidden_size: int,
-    ffn_hidden_size: int,
+    ffn_hidden_size: int | None = None,
+    ffn_mult: float = 4.0,
     swiglu: bool = True,
-    tied_embeddings: bool = True,
+    tied_embeddings: bool = False,
     vocab_size: int = 50304,
+    attn_residual: bool = False,
+    attn_res_learnable_norm: bool = False
 ) -> Dict[str, int]:
-    per_layer_params = (
-        4 * hidden_size * hidden_size  # FFN
-        + (int(swiglu) + 2) * hidden_size * ffn_hidden_size  # Swiglu
-        + 4 * hidden_size  # norms
-    )
+    h = hidden_size
+    f = ffn_hidden_size if ffn_hidden_size is not None else int(ffn_mult * h)
 
-    embed_params = (int(tied_embeddings) + 1) * vocab_size * hidden_size
+    attn_params = 4 * h * h                    # W_q, W_k, W_v, W_o  (MHA, no bias)
+    ffn_params = (2 + int(swiglu)) * h * f     # up, down (+ gate if SwiGLU)
+    norm_params = 2 * h                        # 2 x RMSNorm per layer
 
-    total_params = num_layers * per_layer_params + embed_params
+    per_layer_params = attn_params + ffn_params + norm_params
+
+    hidden_params = num_layers * per_layer_params
+    embed_params = (2 - int(tied_embeddings)) * vocab_size * h
+    final_norm_params = h                      # pre-head RMSNorm
+
+    attn_res_params = attn_res_norm_params = 0
+    if attn_residual:    
+        attn_res_norm_params = (num_layers * 2 * h + h) if attn_res_learnable_norm else 0
+        attn_res_params = 2 * num_layers * h
+
+    hidden_params += attn_res_params + attn_res_norm_params
 
     return {
-        "hidden_params": num_layers * per_layer_params,
+        "hidden_params": hidden_params,
         "embed_params": embed_params,
-        "total_params":total_params,
+        "final_norm_params": final_norm_params,
+        "total_params": hidden_params + embed_params + final_norm_params,
     }
 
 
