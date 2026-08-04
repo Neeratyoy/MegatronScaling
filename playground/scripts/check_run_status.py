@@ -51,9 +51,9 @@ def get_args():
         help="print only comma-separated indices with status 0"
     )    
     parser.add_argument(
-        "--pending_list", 
+        "--failed",
         action="store_true",
-        help="print comma-separated indices, and path list with status 0"
+        help="print only comma-separated indices with status None"
     )
     return parser.parse_args()
 
@@ -69,15 +69,21 @@ if __name__ == "__main__":
     print(f"Number of pending runs: {len(df[df['status'] == 0])}")
     print(f"Number of failed runs: {len(df[df['status'].isna()])}")
     print("==========================")
-    print()
 
-    if args.pending or args.pending_list:
+    if args.pending:
         print("Pending run indices (comma-separated):", end=" ")
         print(",".join(str(i) for i in df.index[df["status"] == 0]))
-    if args.pending_list:
-        print("Pending run indices and paths (comma-separated):")
+        print("Pending paths (comma-separated):")
         pending_runs = df[df["status"] == 0]
         pending_list = [f"{row['path']}" for i, row in pending_runs.iterrows()]
         print("\n".join(pending_list))
-    print()
+        print("==========================")
+    if args.failed:
+        print("Failed (or not started) run indices (comma-separated):", end=" ")
+        print(",".join(str(i) for i in df.index[df["status"].isna()]))
+        print("Failed paths (comma-separated):")
+        failed_runs = df[df["status"].isna()]
+        failed_list = [f"{row['path']}" for i, row in failed_runs.iterrows()]
+        print("\n".join(failed_list))
+    print("==========================")
 # end of file

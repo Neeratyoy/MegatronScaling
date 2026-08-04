@@ -38,7 +38,7 @@ def _recursive_path_explore(path: Path, endfile: str = "run_metrics.parquet"):
     return _paths
 
 
-def _read_parquet(path: Path, col: str = "lm loss") -> pd.DataFrame:
+def _read_parquet(path: Path, col: str = "lm loss", store_last: bool = False) -> pd.DataFrame:
     df = pd.read_parquet(path)
     df = df.sort_values("step").reset_index(drop=True)
     df = df.loc[df[col].dropna().index]
@@ -65,6 +65,10 @@ def _read_parquet(path: Path, col: str = "lm loss") -> pd.DataFrame:
     df["run_type"] = path.parent.parent.name
     df["total_tokens"] = df["global_batch_size"] * df["seq_length"] * df["step"]
 
+    if store_last:
+        df = df.sort_values("step").tail(1)
+        df["path"] = str(path)
+
     return df
 
 
@@ -89,6 +93,17 @@ def get_args():
         default="lm loss",
         help="Column name to filter the DataFrame on. Only rows with non-null values in this column will be kept."
     )
+    parser.add_argument(
+        "--store_last",
+        action="store_true",
+        help="If set, only the last row of each run's DataFrame will be kept."
+    )
+    parser.add_argument(
+        "--filename",
+        type=str,
+        default="aggregated_run_metrics.parquet",
+        help="Filename for the aggregated metrics output."
+    )
     return parser.parse_args()
 
 
@@ -100,8 +115,11 @@ if __name__ == "__main__":
     _df = pd.DataFrame()
     for i, path in enumerate(all_paths, start=1):
         print(f"Processing {i}/{len(all_paths)}: {path}", end="\r")
-        _df = pd.concat([_df, _read_parquet(path, col=args.col)], ignore_index=True)
+        _df = pd.concat(
+            [_df, _read_parquet(path, col=args.col, store_last=args.store_last)], 
+            ignore_index=True
+        )
     print()
-    _df.to_parquet(args.base_path / "aggregated_run_metrics.parquet", index=False)
-    print(f"Aggregated metrics saved to: {args.base_path / 'aggregated_run_metrics.parquet'}")
+    _df.to_parquet(args.base_path / args.filename, index=False)
+    print(f"Aggregated metrics saved to: {args.base_path / args.filename}")
 # end of file

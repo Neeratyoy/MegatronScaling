@@ -35,7 +35,7 @@ def dump_tensorboard_to_parquet(
 
     df = pd.concat(frames, axis=1).sort_index().reset_index()
     out_path = os.path.join(out_path, out_name)
-    df.to_parquet(out_path, index=False)
+    df.to_parquet(out_path, index=False, engine="pyarrow")
     return out_path
 # en of file
 
@@ -61,6 +61,12 @@ if __name__ == "__main__":
         type=str, 
         default="run_metrics.parquet", 
         help="Output Parquet file name"
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=2,
+        help="Depth of the directory structure to look for runs (default: 2)"
     )
     parser.add_argument(
         "--on-complete",
