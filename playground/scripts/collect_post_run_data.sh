@@ -2,13 +2,14 @@
 
 source ${HOME}/depth.sh
 
-BASE_DIR=$1  # TODO: set this; assumes 2-level of depth to get to the tensorboard logs
+BASE_DIR=$1
 
-for d in ${BASE_DIR}/*/* ; do
-    echo "Processing directory: $d"
-    # call the Python script to process the TensorBoard logs in the directory
-    python ${codedir}/tensorboard_utils.py \
-        --dir $d \
-        --on-complete
-done
+NPROC=${2:-4}  # for parallelism
+
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 ARROW_NUM_THREADS=1
+export MALLOC_CONF="background_thread:false"
+
+find "${BASE_DIR}" -mindepth 2 -maxdepth 2 -type d -print0 \
+    | xargs -0 -P "${NPROC}" -n1 \
+      python "${codedir}/tensorboard_utils.py" --on-complete --dir
 # end of file
