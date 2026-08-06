@@ -18,6 +18,7 @@ CONFIG_VARS_OF_INTEREST = [
     "micro_batch_size",
     "global_batch_size",
     "weight_decay",
+    "lr",
     "lr_warmup_iters",
     "lr_wsd_decay_iters",
     "vocab_size",
@@ -42,7 +43,6 @@ def _read_parquet(path: Path, col: str = "lm loss", store_last: bool = False) ->
     df = pd.read_parquet(path)
     df = df.sort_values("step").reset_index(drop=True)
     df = df.loc[df[col].dropna().index]
-    df["max_lr"] = df["learning-rate"].max()
 
     with open(path.parent / "run_config.json", "r") as f:
         config = json.load(f)
