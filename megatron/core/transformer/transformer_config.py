@@ -302,7 +302,7 @@ class TransformerConfig(ModelParallelConfig):
     Sublayer deltas per block value: 1 = Full, 2·⌈L/N⌉ = Block.
     """
 
-    attn_res_learnable_norm: bool = False
+    attn_res_learnable_norm: bool = True
     """If True, the RMSNorm inside the AttnRes score function (phi, eq 2 of
     arXiv:2603.15031) has a learnable per-channel weight (elementwise_affine);
     if False (default), it is a parameterless RMSNorm. One norm per mixing site.
@@ -311,7 +311,7 @@ class TransformerConfig(ModelParallelConfig):
     attn_res_norm_eps: float = 1e-6
     """Epsilon value for the RMSNorm inside the AttnRes score function."""
 
-    attn_res_query_weight_decay: bool = False
+    attn_res_query_weight_decay: bool = True
     """If True, the AttnRes query vector is subject to weight decay applied to other parameters."""
 
     ####################
