@@ -89,7 +89,8 @@ def resolve_num_heads(H, NH, head_dim_min):
     """Shrink NH by 1 until H splits evenly with head_dim >= head_dim_min.
     Returns a valid NH, or None (failure) if it bottoms out at NH == 2."""
     while NH >= 2:
-        if H % NH == 0 and H // NH >= head_dim_min:
+        head_dim = H // NH
+        if H % NH == 0 and head_dim >= head_dim_min and head_dim % 2 == 0:
             return NH
         NH -= 1
     return None
@@ -218,10 +219,10 @@ if __name__ == "__main__":
         for ar, row in ar_df.iterrows():
             _config = config_dict.copy()
             _config.update({
-                "NUM_LAYERS": row["L"],
-                "HIDDEN_SIZE": row["H"],
-                "NUM_ATTENTION_HEADS": row["NH"],
-                "FFN_HIDDEN_SIZE": row["H"] * (int(config_dict["FFN_HIDDEN_SIZE"]) // int(config_dict["HIDDEN_SIZE"])),
+                "NUM_LAYERS": int(row["L"]),
+                "HIDDEN_SIZE": int(row["H"]),
+                "NUM_ATTENTION_HEADS": int(row["NH"]),
+                "FFN_HIDDEN_SIZE": int(row["H"] * (int(config_dict["FFN_HIDDEN_SIZE"]) // int(config_dict["HIDDEN_SIZE"]))),
             })
             _name = f"{Path(args.config_file).stem.split('AR')[0]}AR{int(np.round(ar))}.info"
             print()
