@@ -37,7 +37,11 @@ def stage_branches(trunk_dir: Path, seed: int = 123456, strict: bool = True) -> 
                 continue
         # creating and mapping the checkpoint to the new branch run directory
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / ckpt.name).symlink_to(ckpt.absolute())
+        link_path = run_dir / ckpt.name
+        if link_path.exists() or link_path.is_symlink():
+            print(f"Skipping symlink for {tag} as {link_path} already exists")
+        else:
+            link_path.symlink_to(ckpt.absolute())
         (run_dir / "latest_checkpointed_iteration.txt").write_text(f"{iter_num}\n")
 
     return tags
@@ -149,7 +153,9 @@ def get_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = get_args()
 
-    out, branch_tags, skipped, tags_df = stage_grid(args.base_path, args.run_file, args.seed, strict=not args.renew)
+    out, branch_tags, skipped, tags_df = stage_grid(
+        args.base_path, args.run_file, args.seed, strict=not args.renew
+    )
     tags_df, branch_tags_filtered = sample_grid(tags_df, args.num_points, args.min_steps)
 
     print(f"Branch runs staged in: {out}")

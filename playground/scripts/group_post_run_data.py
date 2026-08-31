@@ -27,6 +27,28 @@ CONFIG_VARS_OF_INTEREST = [
 DEFAULT_VOCAB_SIZE = 50304
 
 
+def smooth_metric(
+    s: pd.Series,
+    method: str = "rolling",   # "rolling" or "ewm"
+    window: int = 25,
+    alpha: float | None = None,
+    min_periods: int = 1,
+) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce")
+
+    if method == "rolling":
+        return s.rolling(window=window, min_periods=min_periods).mean()
+
+    if method == "ewm":
+        # If alpha is not set, derive a reasonable one from window
+        # (similar smoothness scale as rolling window).
+        if alpha is None:
+            alpha = 2 / (window + 1)
+        return s.ewm(alpha=alpha, adjust=False, min_periods=min_periods).mean()
+
+    raise ValueError("method must be 'rolling' or 'ewm'")
+
+
 def _recursive_path_explore(path: Path, endfile: str = "run_metrics.parquet"):
     if path.is_file() and path.name == endfile:
         return [path]
@@ -39,10 +61,20 @@ def _recursive_path_explore(path: Path, endfile: str = "run_metrics.parquet"):
     return _paths
 
 
-def _read_parquet(path: Path, col: str = "lm loss", store_last: bool = False) -> pd.DataFrame:
+def _read_parquet(
+    path: Path,
+    col: str = "lm loss",
+    store_last: bool = False,
+    smooth: bool = False,
+    smooth_key: str = "lm loss",
+    smooth_window: int = 25,
+) -> pd.DataFrame:
     df = pd.read_parquet(path)
     df = df.sort_values("step").reset_index(drop=True)
     df = df.loc[df[col].dropna().index]
+
+    if smooth:
+        df[f"{smooth_key}_smoothed"] = smooth_metric(df[smooth_key], window=smooth_window)
 
     with open(path.parent / "run_config.json", "r") as f:
         config = json.load(f)
@@ -99,6 +131,23 @@ def get_args():
         help="If set, only the last row of each run's DataFrame will be kept."
     )
     parser.add_argument(
+        "--smooth",
+        action="store_true",
+        help="If set, add a smoothed version of --smooth_key as a new '<smooth_key>_smoothed' column."
+    )
+    parser.add_argument(
+        "--smooth_key",
+        type=str,
+        default="lm loss",
+        help="Column name to smooth when --smooth is set."
+    )
+    parser.add_argument(
+        "--smooth_window",
+        type=int,
+        default=25,
+        help="Rolling window size used when smoothing --smooth_key."
+    )
+    parser.add_argument(
         "--filename",
         type=str,
         default="aggregated_run_metrics.parquet",
@@ -116,7 +165,14 @@ if __name__ == "__main__":
     for i, path in enumerate(all_paths, start=1):
         print(f"Processing {i}/{len(all_paths)}: {path}", end="\r")
         _df = pd.concat(
-            [_df, _read_parquet(path, col=args.col, store_last=args.store_last)], 
+            [_df, _read_parquet(
+                path,
+                col=args.col,
+                store_last=args.store_last,
+                smooth=args.smooth,
+                smooth_key=args.smooth_key,
+                smooth_window=args.smooth_window,
+            )],
             ignore_index=True
         )
     print()
