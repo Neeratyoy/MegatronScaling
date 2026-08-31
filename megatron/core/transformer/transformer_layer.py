@@ -526,6 +526,8 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # mixing site (0 = pre-attn, 1 = pre-MLP). `attn_res_learnable_norm` toggles
         # the learnable per-channel weight via elementwise_affine; affine=False is
         # the stateless norm, mathematically identical to affine=True at init.
+        # NOTE: the block prunes the site-0 norm on its first layer, where the pre-attn
+        # mix is skipped; see TransformerBlock.__init__.
         self.attn_res_norms = torch.nn.ModuleList([
             torch.nn.RMSNorm(
                 self.config.hidden_size,

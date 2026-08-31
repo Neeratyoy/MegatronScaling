@@ -361,6 +361,20 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         self._build_layers()
         self.num_layers_per_pipeline_rank = len(self.layers)
 
+        # forward() seeds AttnResValues at layers[0] and skips its pre-attention mix:
+        # there the mixture would be over the single value h1, where softmax is
+        # identically 1.0, so the output is h1 unchanged and the gradients to both the
+        # query and the phi-norm are exactly zero. A norm allocated for that site could
+        # never be trained, so the slot is pruned here rather than in TransformerLayer:
+        # the seeding rule lives in forward() just below, and keeping the two together
+        # is what makes this correct for every pipeline stage (each block seeds its own
+        # history today). If the history is ever carried across pipeline stages, seeding
+        # moves to the first stage only and this guard gains `and self.pre_process`.
+        # The slot is left as None, not IdentityOp, so a future call raises instead of
+        # silently mixing over un-normalized keys.
+        if self.config.attention_residuals and len(self.layers) > 0:
+            self.layers[0].attn_res_norms[0] = None
+
         # Output Layer Attention Residual Query.
         # Only the stage that owns the output side of the model (post_process=True,
         # same stage as final_layernorm) performs the final output mix, so only that
