@@ -364,16 +364,24 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         # forward() seeds AttnResValues at layers[0] and skips its pre-attention mix:
         # there the mixture would be over the single value h1, where softmax is
         # identically 1.0, so the output is h1 unchanged and the gradients to both the
-        # query and the phi-norm are exactly zero. A norm allocated for that site could
-        # never be trained, so the slot is pruned here rather than in TransformerLayer:
-        # the seeding rule lives in forward() just below, and keeping the two together
-        # is what makes this correct for every pipeline stage (each block seeds its own
-        # history today). If the history is ever carried across pipeline stages, seeding
-        # moves to the first stage only and this guard gains `and self.pre_process`.
-        # The slot is left as None, not IdentityOp, so a future call raises instead of
-        # silently mixing over un-normalized keys.
+        # query and the phi-norm are exactly zero. That norm can therefore never be
+        # trained, so it is frozen here rather than in TransformerLayer: the seeding
+        # rule lives in forward() just below, and keeping the two together is what makes
+        # this correct for every pipeline stage (each block seeds its own history
+        # today). If the history is ever carried across pipeline stages, seeding moves
+        # to the first stage only and this guard gains `and self.pre_process`.
+        #
+        # The module is frozen, NOT removed. Dist-checkpointing stacks per-layer
+        # parameters into one tensor with the layer index as axis 0, so every layer must
+        # contribute its slice; deleting layer 0's leaves a hole and
+        # validate_sharding_integrity() rejects the save. Freezing keeps the parameter in
+        # state_dict() (sharding stays whole) while excluding it from the DDP grad
+        # buckets and the optimizer, which is what stops it from ever being reported as a
+        # parameter that produced no gradient.
         if self.config.attention_residuals and len(self.layers) > 0:
-            self.layers[0].attn_res_norms[0] = None
+            site0_norm = self.layers[0].attn_res_norms[0]
+            if getattr(site0_norm, 'weight', None) is not None:
+                site0_norm.weight.requires_grad = False
 
         # Output Layer Attention Residual Query.
         # Only the stage that owns the output side of the model (post_process=True,
