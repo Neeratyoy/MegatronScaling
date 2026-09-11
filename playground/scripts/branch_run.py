@@ -78,18 +78,15 @@ def stage_grid(
 
 
 def sample_grid(
-    tags_df: pd.DataFrame, num_points: int = None, min_steps: int = None
+    tags_df: pd.DataFrame, num_points: int = None, min_frac: float = None
 ) -> tuple[pd.DataFrame, list[str] | None]:
-    if min_steps is not None:
+    if min_frac is not None:
         out = []
         tags_df["iter"] = tags_df["iter"].astype(int)
         for config, grp in tags_df.groupby("config"):
             avail = np.sort(grp["iter"].unique())
-            _min_id = np.searchsorted(
-                avail, 
-                min_steps if min_steps is not None else 0, 
-                side="left"
-            )
+            min_steps = min_frac * avail[-1]
+            _min_id = np.searchsorted(avail, min_steps, side="left")
             # check if there are enough available iterations to sample from
             if _min_id >= len(avail):
                 print(f"Skipping config {config} as it has no available iterations >= {min_steps}")
@@ -97,7 +94,7 @@ def sample_grid(
             if num_points is not None and num_points >= len(avail) - _min_id:
                 print(f"Skipping config {config} as it has fewer available iterations than requested points")
                 continue
-            targets = np.linspace(avail[_min_id], avail[-1], num_points)
+            targets = np.linspace(avail[-1], avail[_min_id], num_points)
             # finding the closest available iteration to each target
             idx = np.abs(avail[:, None] - targets).argmin(axis=0)
             out.append(pd.DataFrame({"config": config, "iter": np.unique(avail[idx])}))
@@ -135,10 +132,10 @@ def get_args() -> argparse.Namespace:
         help="Number of steps to linearly sample from the grid (default: all)"
     )
     parser.add_argument(
-        "--min_steps",
+        "--min_frac",
         default=None,
-        type=int,
-        help="Minimum number of steps to consider for branching (default: None, i.e. no minimum)"
+        type=float,
+        help="Minimum fraction of each config's max iter to consider for branching (default: None, i.e. no minimum)"
     )
     parser.add_argument(
         "--renew",
@@ -153,10 +150,13 @@ def get_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = get_args()
 
+    if args.min_frac is not None:
+        assert 0 < args.min_frac <= 1, "min_frac must be between 0 and 1"
+
     out, branch_tags, skipped, tags_df = stage_grid(
         args.base_path, args.run_file, args.seed, strict=not args.renew
     )
-    tags_df, branch_tags_filtered = sample_grid(tags_df, args.num_points, args.min_steps)
+    tags_df, branch_tags_filtered = sample_grid(tags_df, args.num_points, args.min_frac)
 
     print(f"Branch runs staged in: {out}")
     # print(f"Branch tags:\n{branch_tags}")
