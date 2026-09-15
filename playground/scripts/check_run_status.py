@@ -1,66 +1,66 @@
 import json
 import pandas as pd
+import re
 from pathlib import Path
 from typing import List
 import argparse
+import shutil
+
+
+_ITER_RE = re.compile(r"^iter_(\d+)$")
 
 
 def is_complete(path: Path) -> int | None:
-    """Status from the checkpoint dir: current vs target `train_iters`."""
+    """Status from the checkpoint dir, comparing on-disk iters to target `train_iters`.
+
+    Returns:
+        1  -> complete (max iter == train_iters)
+        0  -> pending (max iter < train_iters)
+       -1  -> discrepancy (something on disk exceeds train_iters)
+        None -> failed / not started
+    """
     p = Path(path)
     if not p.exists():
         return None
-    if not (p / "latest_checkpointed_iteration.txt").exists():
-        return None
-    if not (p / "run_config.json").exists():
-        return None
-    target = int(json.loads((p / "run_config.json").read_text())["train_iters"])
-    current = int((p / "latest_checkpointed_iteration.txt").read_text().strip())
-    if current > target:
-        return None
-    return 1 if current == target else 0
 
-
-def is_complete_metrics(path: Path, metric_file: str = "run_metrics.parquet") -> int | None:
-    """Stricter status: requires `run_metrics.parquet` itself to reach `train_iters`."""
-    p = Path(path)
-    metrics_path = p / metric_file
     config_path = p / "run_config.json"
-    if not metrics_path.exists() or not config_path.exists():
+    if not config_path.exists():
         return None
-    target = int(json.loads(config_path.read_text())["train_iters"])
     try:
-        df = pd.read_parquet(metrics_path)
+        target = int(json.loads(config_path.read_text())["train_iters"])
     except Exception:
         return None
-    if df.empty:
+
+    # iteration dirs: iter_0000500, iter_0010173, ...
+    iters = [
+        int(m.group(1))
+        for d in p.iterdir()
+        if d.is_dir() and (m := re.match(r"^iter_(\d+)$", d.name))
+    ]
+
+    # pointer file, top level or under latest/
+    latest = None
+    for candidate in (p / "latest_checkpointed_iteration.txt",
+                      p / "latest" / "latest_checkpointed_iteration.txt"):
+        if candidate.exists():
+            try:
+                latest = int(candidate.read_text().strip())
+            except ValueError:
+                return None
+            break
+
+    if not iters and latest is None:
         return None
-    # filter/preprocess
-    df = df.loc[df["learning-rate"].notna()]
-    current = int(df["step"].max())
-    if current > target:
-        return None
-    return 1 if current == target else 0
 
+    observed = max(iters + ([latest] if latest is not None else []))
 
-def is_complete_both(path: Path, metric_file: str = "run_metrics.parquet") -> int | None:
-    """Requires checkpoint status and metrics status to agree; disagreement -> None (failed)."""
-    ckpt_status = is_complete(path)
-    metrics_status = is_complete_metrics(path, metric_file)
-    if ckpt_status != metrics_status:
-        return None
-    return ckpt_status
-
-
-CHECK_FNS = {
-    "checkpoint": is_complete,
-    "metrics": is_complete_metrics,
-    "both": is_complete_both,
-}
+    if observed > target:
+        return -1
+    return 1 if observed == target else 0
 
 
 def check_run_status_given_a_run_file(
-    base_path: Path, run_file: Path, seed: int = 123456, check: str = "checkpoint"
+    base_path: Path, run_file: Path, seed: int = 123456
 ) -> pd.DataFrame:
     # load the run file
     run_file = Path(run_file)
@@ -70,16 +70,62 @@ def check_run_status_given_a_run_file(
         run_paths = [line.strip() for line in f.readlines() if line.strip()]
 
     base_path = Path(base_path)
-    check_fn = CHECK_FNS[check]
 
     # creating status map
     path_map = {}
     for i, run_name in enumerate(run_paths):
         _run = base_path / run_name / f"seed={seed}"
-        path_map[i] = {"path": _run, "status": check_fn(_run)}
+        path_map[i] = {"path": _run, "status": is_complete(_run)}
     path_map = pd.DataFrame.from_dict(path_map, orient="index")
     
     return path_map
+
+
+def collect_checkpoints(
+    path: Path, 
+    keep_only_last_checkpoint: bool = False,
+    dry_run: bool = True
+) -> tuple[dict[int, Path], list[Path]]:
+    """Map iteration -> checkpoint dir for a run directory.
+
+    Scans persistent checkpoints (path/iter_*) and non-persistent ones
+    (path/latest/iter_*). On an iteration collision the persistent copy wins.
+
+    With keep_only_last_checkpoint=True, deletes every checkpoint except the
+    highest iteration found and any iteration named by a tracker file.
+    """
+    if is_complete(path) != 1:
+        return {}, []
+
+    ckpts: dict[int, Path] = {}
+    for root in (path / "latest", path):          # path second so persistent wins
+        if not root.is_dir():
+            continue
+        for d in root.iterdir():
+            m = _ITER_RE.match(d.name)
+            if m and d.is_dir() and not d.is_symlink():
+                ckpts[int(m.group(1))] = d
+
+    if not ckpts or not keep_only_last_checkpoint:
+        return ckpts, []
+
+    keep = {max(ckpts)}
+    for tracker in (
+        path / "latest_checkpointed_iteration.txt",
+        path / "latest" / "latest_checkpointed_iteration.txt"
+    ):
+        if tracker.is_file():
+            txt = tracker.read_text().strip()
+            if txt.isdigit():
+                keep.add(int(txt))
+
+    to_delete = [d for it, d in sorted(ckpts.items()) if it not in keep]
+
+    if not dry_run:
+        for d in to_delete:
+            shutil.rmtree(d)
+
+    return {it: d for it, d in ckpts.items() if it in keep}, to_delete
 
 
 def get_args():
@@ -88,29 +134,20 @@ def get_args():
     parser.add_argument("--run_file", type=Path, required=True, help="File containing list of runs to check")
     parser.add_argument("--seed", type=int, default=123456)
     parser.add_argument(
-        "--check",
-        choices=list(CHECK_FNS),
-        default="checkpoint",
-        help="'checkpoint': latest_checkpointed_iteration.txt vs train_iters (default, cheapest). "
-        "'metrics': run_metrics.parquet max(step) vs train_iters (stricter, catches broken logging). "
-        "'both': status only counts if checkpoint and metrics agree, else treated as failed."
+        "--clean",
+        action="store_true",
+        help="List checkpoints that would be deleted from completed runs (NO DELETION)",
     )
     parser.add_argument(
-        "--pending", 
+        "--delete",
         action="store_true",
-        help="print only comma-separated indices with status 0"
-    )    
-    parser.add_argument(
-        "--failed",
-        action="store_true",
-        help="print only comma-separated indices with status None"
+        help="[WARNING] With --clean, actually DELETE them",
     )
     return parser.parse_args()
 
-
 if __name__ == "__main__":
     args = get_args()
-    df = check_run_status_given_a_run_file(args.base_path, args.run_file, args.seed, check=args.check)
+    df = check_run_status_given_a_run_file(args.base_path, args.run_file, args.seed)
 
     print()
     print("=== Run Status Summary ===")
@@ -120,20 +157,37 @@ if __name__ == "__main__":
     print(f"Number of failed runs: {len(df[df['status'].isna()])}")
     print("==========================")
 
-    if args.pending:
-        print("Pending run indices (comma-separated):", end=" ")
-        print(",".join(str(i) for i in df.index[df["status"] == 0]))
-        print("Pending paths (comma-separated):")
-        pending_runs = df[df["status"] == 0]
-        pending_list = [f"{row['path']}" for i, row in pending_runs.iterrows()]
-        print("\n".join(pending_list))
-        print("==========================")
-    if args.failed:
-        print("Failed (or not started) run indices (comma-separated):", end=" ")
-        print(",".join(str(i) for i in df.index[df["status"].isna()]))
-        print("Failed paths (comma-separated):")
-        failed_runs = df[df["status"].isna()]
-        failed_list = [f"{row['path']}" for i, row in failed_runs.iterrows()]
-        print("\n".join(failed_list))
+    print("Pending run indices (comma-separated):", end=" ")
+    print(",".join(str(i) for i in df.index[df["status"] == 0]))
+    print("Pending paths (comma-separated):")
+    pending_runs = df[df["status"] == 0]
+    pending_list = [f"{row['path']}" for i, row in pending_runs.iterrows()]
+    print("\n".join(pending_list))
     print("==========================")
+    
+    print("Failed (or not started) run indices (comma-separated):", end=" ")
+    print(",".join(str(i) for i in df.index[df["status"].isna()]))
+    print("Failed paths (comma-separated):")
+    failed_runs = df[df["status"].isna()]
+    failed_list = [f"{row['path']}" for i, row in failed_runs.iterrows()]
+    print("\n".join(failed_list))
+    print("==========================")
+
+    if args.clean:
+        dry_run = not args.delete
+        print("=== Checkpoint Cleanup ({}) ===".format("DRY RUN" if dry_run else "DELETING"))
+        total = 0
+        for i, row in df[df["status"] == 1].iterrows():
+            kept, removed = collect_checkpoints(
+                row["path"], keep_only_last_checkpoint=True, dry_run=dry_run
+            )
+            if not removed:
+                continue
+            total += len(removed)
+            print(f"[{i}] {row['path']}")
+            print(f"    keep:   {', '.join(str(d.name) for d in kept.values())}")
+            for d in removed:
+                print(f"    {'would remove' if dry_run else 'removed'}: {d}")
+        print(f"Total checkpoint dirs {'to remove' if dry_run else 'removed'}: {total}")
+        print("==========================")
 # end of file

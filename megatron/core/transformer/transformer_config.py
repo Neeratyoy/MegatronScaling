@@ -297,6 +297,11 @@ class TransformerConfig(ModelParallelConfig):
     If set, the number of blocks must be less than or equal to the number of layers.
     """
 
+    attn_res_with_max_blocks: bool = False
+    """Whether to use the maximum number of blocks for Block AttnRes.
+    If True, the number of blocks will be set to the number of layers.
+    """
+
     attn_res_group_per_block: Optional[int] = None
     """Derived in post_init from attn_res_blocks; DO NOT SET.
     Sublayer deltas per block value: 1 = Full, 2·⌈L/N⌉ = Block.
@@ -2643,6 +2648,10 @@ class TransformerConfig(ModelParallelConfig):
                 self.attention_backend == AttnBackend.flash
             ), "Batch invariant mode only supports FlashAttention"
 
+        if self.attn_res_with_max_blocks:
+            self.attention_residuals = True
+            self.attn_res_blocks = self.num_layers
+        
         if self.attention_residuals:
             # AttnRes runtime state (`attn_res` in TransformerBlock.forward) is only
             # created in the non-recompute layer loop; with full recompute the layers
