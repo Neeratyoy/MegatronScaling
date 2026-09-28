@@ -15,8 +15,11 @@ from lm_eval_megatron import ALL_TASKS
 
 def flatten(d):
     """Groups (e.g. mmlu) load as nested dicts; yield the leaf tasks."""
-    for name, t in d.items():
-        yield from flatten(t) if isinstance(t, dict) else [(name, t)]
+    for name, t in d.items():        
+        if isinstance(t, dict):
+            yield from flatten(t)
+        elif hasattr(t, "download"):  # skip Group objects
+            yield str(name), t
 
 
 tasks = sys.argv[1:] or ALL_TASKS
