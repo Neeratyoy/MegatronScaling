@@ -26,6 +26,14 @@ from megatron.training.checkpointing import load_args_from_checkpoint, load_chec
 from megatron.training.global_vars import set_global_variables
 from model_provider import model_provider
 
+# Everything we might ever run (download script pre-fetches all of these).
+ALL_TASKS = [
+    "hellaswag", "arc_easy", "arc_challenge", "piqa", "winogrande",
+    "boolq", "openbookqa", "sciq", "copa", "lambada_openai",
+    "mmlu",      # slow, ~chance below 1B
+    "wikitext",  # needs loglikelihood_rolling (not implemented yet)
+]
+# Default subset actually evaluated.
 TASKS = ["hellaswag", "arc_easy", "arc_challenge", "piqa", "winogrande"]
 
 # Architecture flags that --use-checkpoint-args does not restore; taken from run_config.json.
