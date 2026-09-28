@@ -82,29 +82,36 @@ def check_run_status_given_a_run_file(
 
 
 def collect_checkpoints(
-    path: Path, 
+    path: Path,
     keep_only_last_checkpoint: bool = False,
     dry_run: bool = True
 ) -> tuple[dict[int, Path], list[Path]]:
     """Map iteration -> checkpoint dir for a run directory.
 
     Scans persistent checkpoints (path/iter_*) and non-persistent ones
-    (path/latest/iter_*). On an iteration collision the persistent copy wins.
+    (path/latest/iter_*). On an iteration collision the persistent copy wins
+    and the shadowed latest/ copy is marked for deletion.
 
     With keep_only_last_checkpoint=True, deletes every checkpoint except the
-    highest iteration found and any iteration named by a tracker file.
+    highest iteration found and any iteration named by the top-level tracker
+    file. The latest/ tracker is deliberately NOT consulted: it always names
+    the checkpoint sitting inside latest/, which would pin it forever.
     """
     if is_complete(path) != 1:
         return {}, []
 
     ckpts: dict[int, Path] = {}
+    shadowed: list[Path] = []                     # latest/ copies displaced by a persistent one
     for root in (path / "latest", path):          # path second so persistent wins
         if not root.is_dir():
             continue
         for d in root.iterdir():
             m = _ITER_RE.match(d.name)
             if m and d.is_dir() and not d.is_symlink():
-                ckpts[int(m.group(1))] = d
+                it = int(m.group(1))
+                if it in ckpts:
+                    shadowed.append(ckpts[it])    # same iteration, latest/ loses -> delete
+                ckpts[it] = d
 
     if not ckpts or not keep_only_last_checkpoint:
         return ckpts, []
@@ -112,20 +119,73 @@ def collect_checkpoints(
     keep = {max(ckpts)}
     for tracker in (
         path / "latest_checkpointed_iteration.txt",
-        path / "latest" / "latest_checkpointed_iteration.txt"
     ):
         if tracker.is_file():
             txt = tracker.read_text().strip()
             if txt.isdigit():
                 keep.add(int(txt))
 
-    to_delete = [d for it, d in sorted(ckpts.items()) if it not in keep]
+    to_delete = [d for it, d in sorted(ckpts.items()) if it not in keep] + shadowed
 
     if not dry_run:
         for d in to_delete:
             shutil.rmtree(d)
 
     return {it: d for it, d in ckpts.items() if it in keep}, to_delete
+
+
+# def collect_checkpoints(
+#     path: Path, 
+#     keep_only_last_checkpoint: bool = False,
+#     dry_run: bool = True
+# ) -> tuple[dict[int, Path], list[Path]]:
+#     """Map iteration -> checkpoint dir for a run directory.
+
+#     Scans persistent checkpoints (path/iter_*) and non-persistent ones
+#     (path/latest/iter_*). On an iteration collision the persistent copy wins
+#     and the shadowed latest/ copy is marked for deletion.
+
+#     With keep_only_last_checkpoint=True, deletes every checkpoint except the
+#     highest iteration found and any iteration named by the top-level tracker
+#     file. The latest/ tracker is deliberately NOT consulted: it always names
+#     the checkpoint sitting inside latest/, which would pin it forever.
+#     """
+#     if is_complete(path) != 1:
+#         return {}, []
+
+#     ckpts: dict[int, Path] = {}
+#     shadowed: list[Path] = []                     # latest/ copies displaced by a persistent one
+#     for root in (path / "latest", path):          # path second so persistent wins
+#         if not root.is_dir():
+#             continue
+#         for d in root.iterdir():
+#             m = _ITER_RE.match(d.name)
+#             if m and d.is_dir() and not d.is_symlink():
+#                 it = int(m.group(1))
+#                 if it in ckpts:
+#                     shadowed.append(ckpts[it])    # same iteration, latest/ loses -> delete
+#                 ckpts[it] = d
+
+#     if not ckpts or not keep_only_last_checkpoint:
+#         return ckpts, []
+
+#     keep = {max(ckpts)}
+#     for tracker in (
+#         path / "latest_checkpointed_iteration.txt",
+#         # path / "latest" / "latest_checkpointed_iteration.txt"
+#     ):
+#         if tracker.is_file():
+#             txt = tracker.read_text().strip()
+#             if txt.isdigit():
+#                 keep.add(int(txt))
+
+#     to_delete = [d for it, d in sorted(ckpts.items()) if it not in keep] + shadowed
+
+#     if not dry_run:
+#         for d in to_delete:
+#             shutil.rmtree(d)
+
+#     return {it: d for it, d in ckpts.items() if it in keep}, to_delete
 
 
 def get_args():
