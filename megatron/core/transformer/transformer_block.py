@@ -388,12 +388,13 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         # same stage as final_layernorm) performs the final output mix, so only that
         # stage gets the query parameter. On intermediate pipeline stages this stays
         # None, which also makes the final-mix guard in forward() fail naturally.
-        self.attn_res_final_query = torch.nn.Parameter(
-            torch.zeros(1, self.config.hidden_size)  # 2-d shaping for optimizer to pickup parameter wrt weight decay
+        self.attn_res_final_query = torch.nn.Linear(
+            self.config.hidden_size, 1, bias=False  # weight [1, hidden]; 2-d so optimizer wd grouping picks it up
         ) if (self.config.attention_residuals and self.post_process) else None
         if self.attn_res_final_query is not None:
+            torch.nn.init.zeros_(self.attn_res_final_query.weight)  # nn.Linear defaults to kaiming; keep zero init
             # important for optimizer scan over parameters to apply weight decay
-            self.attn_res_final_query.no_wd_attn_res = not self.config.attn_res_query_weight_decay
+            self.attn_res_final_query.weight.no_wd_attn_res = not self.config.attn_res_query_weight_decay
 
         # RMSNorm inside phi (eq 2) for the final output mix; learnability toggled
         # via elementwise_affine. Same ownership rules as attn_res_final_query above.
@@ -941,7 +942,7 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
             q = layer.attn_res_query[layer_idx]
             norm = layer.attn_res_norms[layer_idx]
         else:
-            q = self.attn_res_final_query[0]
+            q = self.attn_res_final_query.weight[0]
             norm = self.attn_res_final_norm
         # collecting the block values (eq 6); n = len(value_history) <= attn_res_blocks + 1
         K = torch.stack(value_history, dim=2)   # [s, b, n, width]
